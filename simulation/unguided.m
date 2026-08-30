@@ -222,16 +222,28 @@ function unguided(num_runs)
     fprintf('==================================================\n');
 end
 
-% --- Pure 3-DoF Unguided M107 Flight Integration ---
+% --- Pure 3-DoF + Spin (STANAG 4355 Modified Point Mass) Flight Integration ---
 function [impact, traj] = run_unguided_flight(v0, theta, psi, env_cfg, record_traj)
     if nargin < 5, record_traj = false; end
     
-    % Authentic 155 mm M107 HE Projectile Physical Properties
+    % Authentic 155 mm M107 HE Projectile Physical & Inertial Properties
     g0     = 9.80665;
     m      = 43.10;                % M107 Shell mass: 43.10 kg (95.0 lbs nominal)
     d_proj = 0.155;                % Caliber diameter: 155 mm (6.10 in)
     S_ref  = pi * (d_proj / 2)^2;  % Aerodynamic reference area: 0.01887 m^2
     Cd0    = 0.25;                 % M107 zero-lift nominal subsonic drag coefficient
+    Ix     = 0.142;                % Axial moment of inertia (kg*m^2)
+    Iy     = 1.62;                 % Transverse pitch/yaw moment of inertia (kg*m^2)
+    
+    % Rifling Twist & Initial Spin Rate
+    % Standard 155 mm rifling: 1 turn in 20 calibers (twist ratio = 20)
+    twist_calibers = 20.0;
+    p = (2.0 * pi * v0) / (twist_calibers * d_proj); % Initial spin (rad/s) (~267 Hz)
+    
+    % Aerodynamic Spin Derivatives (STANAG 4355 standard baseline for M107)
+    Clp      = -0.015;             % Roll damping coefficient (spin deceleration)
+    C_La     = 2.0;                % Normal force / lift slope derivative (per radian)
+    C_mag_p  = 0.008;              % Magnus force derivative
     
     % Initial velocities
     vx = v0 * cosd(theta) * cosd(psi);
@@ -263,34 +275,48 @@ function [impact, traj] = run_unguided_flight(v0, theta, psi, env_cfg, record_tr
         % 2. Altitude-Dependent Wind Profile (Crosswind & Jet Stream)
         v_wind = wind_profile(alt, env_cfg);
         
-        % Relative aerodynamic velocity
+        % Relative aerodynamic velocity vector
         v_rel_x = vx - v_wind(1);
         v_rel_y = vy - v_wind(2);
         v_rel_z = vz - v_wind(3);
-        v_rel_mag = sqrt(v_rel_x^2 + v_rel_y^2 + v_rel_z^2);
+        v_rel_vec = [v_rel_x; v_rel_y; v_rel_z];
+        v_rel_mag = norm(v_rel_vec);
+        v_unit = v_rel_vec / max(1e-3, v_rel_mag);
         
-        % Mach number and wave drag
+        % 3. Mach number and wave drag
         Mach = v_rel_mag / a_sound;
         Cd = cd_mach_model(Mach, Cd0);
         
-        % Aerodynamic Drag Vector (NO CONTROL / NO CANARDS)
-        drag_const = 0.5 * rho * S_ref * Cd * v_rel_mag / m;
-        ax_aero = -drag_const * v_rel_x;
-        ay_aero = -drag_const * v_rel_y;
-        az_aero = -drag_const * v_rel_z;
+        % 4. Spin Roll Decay Integration (viscous air friction damping torque)
+        dp_dt = (0.5 * rho * v_rel_mag * S_ref * (d_proj^2) * Clp / Ix) * p;
+        p = max(0, p + dp_dt * dt);
         
-        % Pure Ballistic Acceleration (Drag + Gravity only)
-        ax = ax_aero;
-        ay = -g0 + ay_aero;
-        az = az_aero;
+        % 5. Aerodynamic Drag Force (retardation along relative airflow)
+        F_drag = -0.5 * rho * S_ref * Cd * v_rel_mag * v_rel_vec;
         
-        % State Integration
+        % 6. Equilibrium Yaw of Repose (STANAG 4355 Spin Drift)
+        % Trajectory curvature caused by gravity produces gyroscopic precession
+        % of the spin axis to the right (+Z for right-hand twist).
+        v_cross_g = cross(v_unit, [0; g0; 0]); % Normal vector oriented toward +Z
+        denom_repose = max(100.0, rho * S_ref * d_proj * 11.5 * (v_rel_mag^2));
+        alpha_e = (2.0 * Ix * p / (denom_repose * v_rel_mag)) * v_cross_g;
+        
+        % Aerodynamic Lift Force from Equilibrium Yaw of Repose
+        F_lift_drift = 0.5 * rho * S_ref * (v_rel_mag^2) * C_La * alpha_e;
+        
+        % Magnus Force from Body Spin Interaction
+        F_mag = 0.5 * rho * S_ref * d_proj * C_mag_p * p * cross(v_unit, alpha_e);
+        
+        % 7. Total Acceleration Vector (Gravity + Drag + Spin Drift + Magnus)
+        a_tot = [0; -g0; 0] + (F_drag + F_lift_drift + F_mag) / m;
+        
+        % State Integration (Euler-Cromer)
         state(1) = state(1) + vx * dt;
         state(2) = state(2) + vy * dt;
         state(3) = state(3) + vz * dt;
-        state(4) = state(4) + ax * dt;
-        state(5) = state(5) + ay * dt;
-        state(6) = state(6) + az * dt;
+        state(4) = state(4) + a_tot(1) * dt;
+        state(5) = state(5) + a_tot(2) * dt;
+        state(6) = state(6) + a_tot(3) * dt;
         
         t = t + dt;
         
