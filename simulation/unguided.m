@@ -1,14 +1,16 @@
 function unguided(num_runs)
     % =========================================================================
-    % 155 mm CONVENTIONAL ARTILLERY - PURE UNGUIDED M107 BALLISTIC SIMULATION
+    % 155 mm CONVENTIONAL ARTILLERY - PARALLEL UNGUIDED M107 BALLISTIC SIMULATION
     % =========================================================================
     % Simulates the standard 155 mm M107 High-Explosive (HE) projectile:
     %   - Projectile Mass: 43.10 kg (nominal 95.0 lbs)
     %   - Caliber Diameter: 155 mm (6.10 in)
-    %   - Profile: 2.0-caliber radius tangent ogive with boat-tail
     %   - Drag Model: STANAG 4355 / McCoy aerodynamic drag coefficient Cd(Mach)
     %   - Environmental: ISA Atmosphere + High-Altitude Jet Stream Shear Layer
+    %   - Spin Dynamics: 1:20 twist rifling, viscous roll decay, yaw of repose
     %   - Dispersion: Gun barrel muzzle velocity and quadrant pointing variations
+    %   - Parallel Architecture: High-throughput SIMD batch vectorization across
+    %     all rounds simultaneously, utilizing multi-threaded OpenMP/BLAS cores.
     % =========================================================================
 
     if nargin < 1, num_runs = 1000; end
@@ -23,35 +25,16 @@ function unguided(num_runs)
     sigma_v0      = 3.5;               % Muzzle velocity variation (m/s) (~0.4% PE)
     sigma_angle   = 0.15;              % Gun laying pointing error (degrees) (~2.6 mils)
     
-    % Preallocate impact positions array [X_impact, Z_impact]
-    impact_points = zeros(num_runs, 2);
-    
-    % Store 3D trajectories for plotting
     max_traj_to_plot = min(num_runs, 40);
-    trajectories = cell(max_traj_to_plot, 1);
     
-    fprintf('Running %d UNGUIDED M107 Monte Carlo ballistic simulations...', num_runs);
+    fprintf('Running %d UNGUIDED M107 Monte Carlo simulations (Parallel SIMD Engine)...', num_runs);
+    t_start = tic;
     
-    % --- Monte Carlo Loop ---
-    for i = 1:num_runs
-        % Launch state perturbations
-        v0    = v0_nominal + sigma_v0 * randn;
-        theta = theta_nominal + sigma_angle * randn;
-        psi   = psi_nominal + sigma_angle * randn;
-        
-        % Perturbed environmental wind conditions per round
-        env_cfg.ground_wind_speed   = max(0, 4.0 + 1.5 * randn);   % Ground wind speed (m/s)
-        env_cfg.ground_wind_azimuth = 45.0 + 10.0 * randn;         % Wind direction azimuth (deg)
-        env_cfg.jet_stream_speed    = max(15, 38.0 + 6.0 * randn); % Peak jet stream at 9.5 km (m/s)
-        
-        record_traj = (i <= max_traj_to_plot);
-        [impact_points(i, :), traj] = run_unguided_flight(v0, theta, psi, env_cfg, record_traj);
-        
-        if record_traj
-            trajectories{i} = traj;
-        end
-    end
-    fprintf(' Done.\n');
+    % --- Parallel Batch Monte Carlo Integration ---
+    [impact_points, trajectories] = run_parallel_monte_carlo(num_runs, v0_nominal, theta_nominal, psi_nominal, ...
+                                                             sigma_v0, sigma_angle, max_traj_to_plot);
+    t_elapsed = toc(t_start);
+    fprintf(' Done in %.2f s (%.0f rounds/sec).\n', t_elapsed, num_runs / t_elapsed);
     
     % --- Statistical & CEP Calculations ---
     dx = impact_points(:, 1) - target(1);
@@ -80,7 +63,7 @@ function unguided(num_runs)
         
         % UNIFIED SINGLE WINDOW (1600 x 850)
         fig = figure('Visible', vis_mode, 'Color', [1 1 1], 'Position', [40, 40, 1600, 850], ...
-                     'Name', '155 mm M107 Unguided Ballistic Analysis - Unified Engineering Display');
+                     'Name', '155 mm M107 Unguided Ballistic Analysis - Parallel Engineering Display');
         
         % =================================================================
         % DIAGRAM 1 (Left 2 Subplots Span): 3D Trajectory Projection
@@ -184,9 +167,12 @@ function unguided(num_runs)
         alts_plot = linspace(0, 12000, 250);
         rhos_plot = zeros(size(alts_plot));
         winds_plot = zeros(size(alts_plot));
+        nom_env.ground_wind_speed = 4.0;
+        nom_env.ground_wind_azimuth = 45.0;
+        nom_env.jet_stream_speed = 38.0;
         for a_idx = 1:length(alts_plot)
             [~, ~, rhos_plot(a_idx), ~] = isa_atmosphere(alts_plot(a_idx));
-            w_vec = wind_profile(alts_plot(a_idx), env_cfg);
+            w_vec = wind_profile(alts_plot(a_idx), nom_env);
             winds_plot(a_idx) = norm(w_vec);
         end
         plot(ax_env, alts_plot/1000, rhos_plot, 'Color', [0.0 0.45 0.85], 'LineWidth', 2, 'DisplayName', 'Air Density \rho (kg/m^3)');
@@ -206,6 +192,7 @@ function unguided(num_runs)
     % --- Command Window Summary Output ---
     fprintf('\n=== UNGUIDED 155 mm M107 BALLISTIC PERFORMANCE ===\n');
     fprintf('Projectile Model            : 155 mm M107 HE (43.10 kg, 2.0-cal ogive)\n');
+    fprintf('Simulated Rounds            : %d (Parallel SIMD Engine in %.2f s)\n', num_runs, t_elapsed);
     fprintf('Target Location             : [%.1f, %.1f] m\n', target(1), target(2));
     fprintf('Mean Impact Point (MIP)     : [%.1f, %.1f] m\n', mip(1), mip(2));
     fprintf('Systemic Range Bias (dx)    : %.1f meters\n', mip(1) - target(1));
@@ -222,137 +209,226 @@ function unguided(num_runs)
     fprintf('==================================================\n');
 end
 
-% --- Pure 3-DoF + Spin (STANAG 4355 Modified Point Mass) Flight Integration ---
-function [impact, traj] = run_unguided_flight(v0, theta, psi, env_cfg, record_traj)
-    if nargin < 5, record_traj = false; end
-    
-    % Authentic 155 mm M107 HE Projectile Physical & Inertial Properties
+% =========================================================================
+% HIGH-SPEED PARALLEL VECTORIZED SIMD MONTE CARLO INTEGRATION ENGINE
+% =========================================================================
+function [impact_points, trajectories] = run_parallel_monte_carlo(N, v0_nom, th_nom, psi_nom, sig_v0, sig_ang, max_plot)
     g0     = 9.80665;
-    m      = 43.10;                % M107 Shell mass: 43.10 kg (95.0 lbs nominal)
-    d_proj = 0.155;                % Caliber diameter: 155 mm (6.10 in)
-    S_ref  = pi * (d_proj / 2)^2;  % Aerodynamic reference area: 0.01887 m^2
-    Cd0    = 0.25;                 % M107 zero-lift nominal subsonic drag coefficient
+    m      = 43.10;                % Shell mass (kg)
+    d_proj = 0.155;                % Caliber diameter (m)
+    S_ref  = pi * (d_proj / 2)^2;  % Reference area (m^2)
+    Cd0    = 0.25;                 % Baseline zero-lift drag
     Ix     = 0.142;                % Axial moment of inertia (kg*m^2)
-    Iy     = 1.62;                 % Transverse pitch/yaw moment of inertia (kg*m^2)
-    
-    % Rifling Twist & Initial Spin Rate
-    % Standard 155 mm rifling: 1 turn in 20 calibers (twist ratio = 20)
-    twist_calibers = 20.0;
-    p = (2.0 * pi * v0) / (twist_calibers * d_proj); % Initial spin (rad/s) (~267 Hz)
-    
-    % Aerodynamic Spin Derivatives (STANAG 4355 standard baseline for M107)
-    Clp      = -0.015;             % Roll damping coefficient (spin deceleration)
-    C_La     = 2.0;                % Normal force / lift slope derivative (per radian)
-    C_mag_p  = 0.008;              % Magnus force derivative
-    
-    % Initial velocities
-    vx = v0 * cosd(theta) * cosd(psi);
-    vy = v0 * sind(theta);
-    vz = v0 * cosd(theta) * sind(psi);
-    
-    % State vector: [x; y; z; vx; vy; vz] starting at [0,0,0]
-    state = [0; 0; 0; vx; vy; vz];
-    dt = 0.01;                     % Integration step (s)
+    twist_calibers = 20.0;         % 1:20 twist barrel
+    dt     = 0.01;                 % Time step (s)
+
+    Clp      = -0.015;             % Viscous roll damping coefficient
+    C_La     = 2.0;                % Lift slope derivative (per rad)
+    C_mag_p  = 0.008;              % Magnus derivative
+
+    % Pre-generate all perturbed initial states
+    v0_all  = v0_nom  + sig_v0  * randn(N, 1);
+    th_all  = th_nom  + sig_ang * randn(N, 1);
+    psi_all = psi_nom + sig_ang * randn(N, 1);
+
+    % Pre-generate environmental winds per round
+    gw_spd  = max(0, 4.0 + 1.5 * randn(N, 1));
+    gw_az   = 45.0 + 10.0 * randn(N, 1);
+    jet_spd = max(15, 38.0 + 6.0 * randn(N, 1));
+
+    % Initial velocity vectors
+    vx = v0_all .* cosd(th_all) .* cosd(psi_all);
+    vy = v0_all .* sind(th_all);
+    vz = v0_all .* cosd(th_all) .* sind(psi_all);
+
+    pos = zeros(N, 3);
+    vel = [vx, vy, vz];
+    p   = (2.0 * pi * v0_all) / (twist_calibers * d_proj);
+
+    active = true(N, 1);
+    impact_points = zeros(N, 2);
+
+    % Preallocate trajectory logging buffers for the first max_plot rounds
+    N_plot = min(N, max_plot);
+    trajectories = cell(N_plot, 1);
+    max_log_pts = 2000;
+    plot_pos_log = zeros(N_plot, max_log_pts, 3);
+    plot_log_k   = ones(N_plot, 1);
+
+    for k = 1:N_plot
+        plot_pos_log(k, 1, :) = [0, 0, 0];
+        plot_log_k(k) = 2;
+    end
+
     t = 0.0;
-    
-    if record_traj
-        max_steps = 12000;
-        traj_log = zeros(max_steps, 3);
-        traj_log(1, :) = [0, 0, 0];
-        log_k = 2;
-    else
-        traj_log = [];
-    end
-    
-    while state(2) >= 0 && state(1) < 50000 && t < 120.0
-        x = state(1); y = state(2); z = state(3);
-        vx = state(4); vy = state(5); vz = state(6);
+    step_count = 0;
+
+    % SIMD Parallel Batch Time Stepping
+    while any(active) && t < 130.0
+        idx = find(active);
+        K = length(idx);
+
+        y   = pos(idx, 2);
         alt = max(0, y);
-        
-        % 1. Atmospheric Model (ISA)
-        [~, ~, rho, a_sound] = isa_atmosphere(alt);
-        
-        % 2. Altitude-Dependent Wind Profile (Crosswind & Jet Stream)
-        v_wind = wind_profile(alt, env_cfg);
-        
-        % Relative aerodynamic velocity vector
-        v_rel_x = vx - v_wind(1);
-        v_rel_y = vy - v_wind(2);
-        v_rel_z = vz - v_wind(3);
-        v_rel_vec = [v_rel_x; v_rel_y; v_rel_z];
-        v_rel_mag = norm(v_rel_vec);
-        v_unit = v_rel_vec / max(1e-3, v_rel_mag);
-        
-        % 3. Mach number and wave drag
-        Mach = v_rel_mag / a_sound;
-        Cd = cd_mach_model(Mach, Cd0);
-        
-        % 4. Spin Roll Decay Integration (viscous air friction damping torque)
-        dp_dt = (0.5 * rho * v_rel_mag * S_ref * (d_proj^2) * Clp / Ix) * p;
-        p = max(0, p + dp_dt * dt);
-        
-        % 5. Aerodynamic Drag Force (retardation along relative airflow)
-        F_drag = -0.5 * rho * S_ref * Cd * v_rel_mag * v_rel_vec;
-        
-        % 6. Equilibrium Yaw of Repose (STANAG 4355 Spin Drift)
-        % Trajectory curvature caused by gravity produces gyroscopic precession
-        % of the spin axis to the right (+Z for right-hand twist).
-        v_cross_g = cross(v_unit, [0; g0; 0]); % Normal vector oriented toward +Z
-        denom_repose = max(100.0, rho * S_ref * d_proj * 11.5 * (v_rel_mag^2));
-        alpha_e = (2.0 * Ix * p / (denom_repose * v_rel_mag)) * v_cross_g;
-        
-        % Aerodynamic Lift Force from Equilibrium Yaw of Repose
-        F_lift_drift = 0.5 * rho * S_ref * (v_rel_mag^2) * C_La * alpha_e;
-        
-        % Magnus Force from Body Spin Interaction
-        F_mag = 0.5 * rho * S_ref * d_proj * C_mag_p * p * cross(v_unit, alpha_e);
-        
-        % 7. Total Acceleration Vector (Gravity + Drag + Spin Drift + Magnus)
-        a_tot = [0; -g0; 0] + (F_drag + F_lift_drift + F_mag) / m;
-        
-        % State Integration (Euler-Cromer)
-        state(1) = state(1) + vx * dt;
-        state(2) = state(2) + vy * dt;
-        state(3) = state(3) + vz * dt;
-        state(4) = state(4) + a_tot(1) * dt;
-        state(5) = state(5) + a_tot(2) * dt;
-        state(6) = state(6) + a_tot(3) * dt;
-        
-        t = t + dt;
-        
-        if record_traj
-            traj_log(log_k, :) = [state(1), state(2), state(3)];
-            log_k = log_k + 1;
+
+        % 1. Vectorized ISA Atmosphere
+        h = max(0, min(alt, 20000));
+        is_trop = h <= 11000;
+
+        T = zeros(K, 1);
+        P = zeros(K, 1);
+
+        % Troposphere
+        T(is_trop) = 288.15 - 0.0065 * h(is_trop);
+        P(is_trop) = 101325 * (1 - 0.0065 * h(is_trop) / 288.15).^(9.80665 / (287.05287 * 0.0065));
+
+        % Stratosphere
+        T_trop = 216.65;
+        P_trop = 101325 * (1 - 0.0065 * 11000 / 288.15)^(9.80665 / (287.05287 * 0.0065));
+        T(~is_trop) = T_trop;
+        P(~is_trop) = P_trop * exp(-9.80665 * (h(~is_trop) - 11000) / (287.05287 * T_trop));
+
+        rho     = P ./ (287.05287 * T);
+        a_sound = sqrt(1.4 * 287.05287 * T);
+
+        % 2. Vectorized Wind Profile
+        c_gw_spd  = gw_spd(idx);
+        c_gw_az   = gw_az(idx);
+        c_jet_spd = jet_spd(idx);
+
+        w_mag = zeros(K, 1);
+        w_dir = zeros(K, 1);
+
+        b1 = alt <= 2000;
+        w_mag(b1) = c_gw_spd(b1) .* (max(10, alt(b1)) / 2000).^0.2;
+        w_dir(b1) = c_gw_az(b1);
+
+        b2 = alt > 2000 & alt <= 8000;
+        frac2 = (alt(b2) - 2000) / 6000;
+        w_mag(b2) = c_gw_spd(b2) * 1.5 + frac2 .* (c_jet_spd(b2) * 0.5);
+        w_dir(b2) = c_gw_az(b2) + frac2 * 30.0;
+
+        b3 = alt > 8000 & alt <= 11500;
+        jet_core = c_jet_spd(b3) .* exp(-((alt(b3) - 9500) / 1200).^2);
+        w_mag(b3) = c_gw_spd(b3) * 1.5 + jet_core;
+        w_dir(b3) = c_gw_az(b3) + 45.0;
+
+        b4 = alt > 11500;
+        frac4 = min(1.0, (alt(b4) - 11500) / 4000);
+        w_mag(b4) = (c_jet_spd(b4) * 0.4) .* (1 - 0.5 * frac4);
+        w_dir(b4) = c_gw_az(b4) + 45.0;
+
+        th_rad = deg2rad(w_dir);
+        Wx = w_mag .* cos(th_rad);
+        Wz = w_mag .* sin(th_rad);
+
+        % 3. Relative Airspeed
+        v_rel_x = vel(idx, 1) - Wx;
+        v_rel_y = vel(idx, 2);
+        v_rel_z = vel(idx, 3) - Wz;
+        v_rel_mag = sqrt(v_rel_x.^2 + v_rel_y.^2 + v_rel_z.^2);
+        v_unit_x  = v_rel_x ./ max(1e-3, v_rel_mag);
+        v_unit_y  = v_rel_y ./ max(1e-3, v_rel_mag);
+
+        % 4. Mach & Aerodynamic Drag
+        Mach = v_rel_mag ./ a_sound;
+        Cd = repmat(Cd0, K, 1);
+        m1 = Mach >= 0.8 & Mach < 1.05;
+        Cd(m1) = Cd0 + 0.22 * ((Mach(m1) - 0.8) / 0.25).^2;
+        m2 = Mach >= 1.05 & Mach < 1.6;
+        Cd(m2) = (Cd0 + 0.22) - 0.08 * ((Mach(m2) - 1.05) / 0.55);
+        m3 = Mach >= 1.6;
+        Cd(m3) = (Cd0 + 0.14) ./ (1 + 0.15 * (Mach(m3) - 1.6));
+
+        % 5. Viscous Spin Decay
+        dp_dt = (0.5 * rho .* v_rel_mag * S_ref * (d_proj^2) * Clp / Ix) .* p(idx);
+        p(idx) = max(0, p(idx) + dp_dt * dt);
+
+        % 6. Aerodynamic Drag Accelerations
+        drag_k  = 0.5 * rho * S_ref .* Cd .* v_rel_mag / m;
+        ax_drag = -drag_k .* v_rel_x;
+        ay_drag = -drag_k .* v_rel_y;
+        az_drag = -drag_k .* v_rel_z;
+
+        % 7. Gyroscopic Repose Lift (Spin Drift)
+        vcg_z = v_unit_x * g0;
+        denom = max(100.0, rho * S_ref * d_proj * 11.5 .* (v_rel_mag.^2));
+        alpha_e_z = (2.0 * Ix * p(idx) ./ (denom .* v_rel_mag)) .* vcg_z;
+        F_lift_z  = 0.5 * rho * S_ref .* (v_rel_mag.^2) * C_La .* alpha_e_z;
+
+        % 8. Magnus Force
+        F_mag_x = 0.5 * rho * S_ref * d_proj * C_mag_p .* p(idx) .* v_rel_mag .* (v_unit_y .* alpha_e_z);
+        F_mag_y = -0.5 * rho * S_ref * d_proj * C_mag_p .* p(idx) .* v_rel_mag .* (v_unit_x .* alpha_e_z);
+
+        % Total Accelerations
+        ax = ax_drag + F_mag_x / m;
+        ay = -g0 + ay_drag + F_mag_y / m;
+        az = az_drag + F_lift_z / m;
+
+        % 9. Symplectic Euler-Cromer Integration
+        prev_pos = pos(idx, :);
+        vel(idx, 1) = vel(idx, 1) + ax * dt;
+        vel(idx, 2) = vel(idx, 2) + ay * dt;
+        vel(idx, 3) = vel(idx, 3) + az * dt;
+
+        pos(idx, 1) = pos(idx, 1) + vel(idx, 1) * dt;
+        pos(idx, 2) = pos(idx, 2) + vel(idx, 2) * dt;
+        pos(idx, 3) = pos(idx, 3) + vel(idx, 3) * dt;
+
+        % Sample trajectories for plotting (every 10 steps = 0.1s)
+        if mod(step_count, 10) == 0
+            for pi_idx = 1:N_plot
+                if active(pi_idx)
+                    pk = plot_log_k(pi_idx);
+                    if pk < max_log_pts
+                        plot_pos_log(pi_idx, pk, :) = pos(pi_idx, :);
+                        plot_log_k(pi_idx) = pk + 1;
+                    end
+                end
+            end
         end
+
+        % Ground Impact Detection & Exact Linear Interpolation
+        hit = pos(idx, 2) < 0;
+        if any(hit)
+            h_idx = idx(hit);
+            frac = prev_pos(hit, 2) ./ (prev_pos(hit, 2) - pos(h_idx, 2));
+            imp_x = prev_pos(hit, 1) + frac .* (pos(h_idx, 1) - prev_pos(hit, 1));
+            imp_z = prev_pos(hit, 3) + frac .* (pos(h_idx, 3) - prev_pos(hit, 3));
+            impact_points(h_idx, 1) = imp_x;
+            impact_points(h_idx, 2) = imp_z;
+
+            % Append final impact coordinate to plotted trajectories
+            for hi = 1:length(h_idx)
+                cur_h = h_idx(hi);
+                if cur_h <= N_plot
+                    pk = plot_log_k(cur_h);
+                    plot_pos_log(cur_h, pk, :) = [imp_x(hi), 0, imp_z(hi)];
+                    plot_log_k(cur_h) = pk + 1;
+                end
+            end
+
+            active(h_idx) = false;
+        end
+
+        t = t + dt;
+        step_count = step_count + 1;
     end
-    
-    % Linear ground-plane interpolation at impact (y = 0)
-    fraction = y / (y - state(2));
-    impact_x = x + fraction * (state(1) - x);
-    impact_z = z + fraction * (state(3) - z);
-    impact   = [impact_x, impact_z];
-    
-    if record_traj
-        traj_log(log_k, :) = [impact_x, 0, impact_z];
-        traj = traj_log(1:log_k, :);
-    else
-        traj = [];
+
+    % Package trajectory bundle
+    for k = 1:N_plot
+        total_pts = plot_log_k(k) - 1;
+        trajectories{k} = squeeze(plot_pos_log(k, 1:total_pts, :));
     end
 end
 
-% --- COMPONENT 1: International Standard Atmosphere (ISA) ---
+% --- Component 1: International Standard Atmosphere (ISA) ---
 function [T, P, rho, a_sound] = isa_atmosphere(alt)
-    R_air = 287.05287;      % Gas constant for dry air (J/(kg*K))
-    gamma = 1.4;            % Specific heat ratio
-    g0    = 9.80665;        % Standard gravitational acceleration (m/s^2)
-    
-    T0 = 288.15;            % Sea-level temperature (K)
-    P0 = 101325;            % Sea-level pressure (Pa)
-    L  = 0.0065;            % Temperature lapse rate (K/m)
-    h_tropopause = 11000.0; % Tropopause boundary (m)
-    
+    R_air = 287.05287;
+    gamma = 1.4;
+    g0    = 9.80665;
+    T0 = 288.15; P0 = 101325; L = 0.0065; h_tropopause = 11000.0;
     h = max(0, min(alt, 20000));
-    
     if h <= h_tropopause
         T = T0 - L * h;
         P = P0 * (1 - L * h / T0)^(g0 / (R_air * L));
@@ -362,16 +438,14 @@ function [T, P, rho, a_sound] = isa_atmosphere(alt)
         T = T_trop;
         P = P_trop * exp(-g0 * (h - h_tropopause) / (R_air * T_trop));
     end
-    
     rho     = P / (R_air * T);
     a_sound = sqrt(gamma * R_air * T);
 end
 
-% --- COMPONENT 2: Altitude-Dependent Jet Stream Wind Profile ---
+% --- Component 2: Altitude-Dependent Jet Stream Wind Profile ---
 function v_wind = wind_profile(alt, env_cfg)
     v_ground_mag = env_cfg.ground_wind_speed;
     wind_dir_deg = env_cfg.ground_wind_azimuth;
-    
     if alt <= 2000
         v_mag = v_ground_mag * (max(10, alt) / 2000)^0.2;
         v_dir = wind_dir_deg;
@@ -388,24 +462,6 @@ function v_wind = wind_profile(alt, env_cfg)
         v_mag = (env_cfg.jet_stream_speed * 0.4) * (1 - 0.5 * frac);
         v_dir = wind_dir_deg + 45.0;
     end
-    
     theta_rad = deg2rad(v_dir);
-    Wx = v_mag * cos(theta_rad);
-    Wy = 0.0;
-    Wz = v_mag * sin(theta_rad);
-    
-    v_wind = [Wx; Wy; Wz];
-end
-
-% --- Compressibility / Mach Drag Scaling Model ---
-function Cd = cd_mach_model(Mach, Cd0)
-    if Mach < 0.8
-        Cd = Cd0;
-    elseif Mach >= 0.8 && Mach < 1.05
-        Cd = Cd0 + 0.22 * ((Mach - 0.8) / 0.25)^2;
-    elseif Mach >= 1.05 && Mach < 1.6
-        Cd = (Cd0 + 0.22) - 0.08 * ((Mach - 1.05) / 0.55);
-    else
-        Cd = (Cd0 + 0.14) / (1 + 0.15 * (Mach - 1.6));
-    end
+    v_wind = [v_mag * cos(theta_rad); 0.0; v_mag * sin(theta_rad)];
 end
