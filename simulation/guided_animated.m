@@ -67,16 +67,16 @@ function guided_animated(anim_duration_sec, save_gif, num_runs)
     
     [theta_virt, psi_virt] = solve_firing_solution(virtual_target, v0_nominal, canard_deflection);
 
-    % --- Step 3: Run Single Perturbed Round (Strong Crosswind) ---
-    fprintf('Simulating single perturbed round (Strong wind perturbation)...\n');
-    perturbed_wind.spd = 9.0;    % Strong wind (m/s)
-    perturbed_wind.az  = -60.0;  % Pushes round off-course
-    perturbed_wind.jet = 42.0;
+    % --- Step 3: Run Single Perturbed Round (Representative 1-Sigma Round) ---
+    fprintf('Simulating single perturbed round (1-Sigma wind perturbation)...\n');
+    perturbed_wind.spd = 4.8;    % Standard 1-sigma wind perturbation (m/s)
+    perturbed_wind.az  = 40.0;   % Typical crossrange direction
+    perturbed_wind.jet = 38.0;
 
     [imp_s_ung, traj_s_ung, logs_s_ung] = run_single_perturbed(v0_nominal, theta_trad, psi_trad, ...
                                                       canard_deflection, false, real_target, 0, perturbed_wind);
     
-    [imp_s_gid, traj_s_gid, logs_s_gid] = run_single_perturbed(v0_nominal, theta_trad, psi_trad, ...
+    [imp_s_gid, traj_s_gid, logs_s_gid] = run_single_perturbed(v0_nominal, theta_virt, psi_virt, ...
                                                       canard_deflection, true, real_target, 0, perturbed_wind);
     
     miss_ung = norm(imp_s_ung - real_target);
