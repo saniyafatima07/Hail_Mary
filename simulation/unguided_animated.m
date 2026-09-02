@@ -3,29 +3,34 @@ function unguided_animated(anim_duration_sec, save_gif)
     % 155 mm CONVENTIONAL ARTILLERY - UNGUIDED M107 15-SECOND ANIMATION
     % =========================================================================
     % Simulates and produces an exact 15-second animated ballistic flight of
-    % the standard 155 mm M107 High-Explosive projectile:
-    %   - Physical Model: STANAG 4355 Modified Point Mass (MPM)
-    %   - Spin Dynamics: 1:20 twist barrel, viscous roll decay, yaw of repose drift
-    %   - Environmental: ISA Atmosphere + Jet Stream Wind Profile
-    %   - Visual: Real-time 3D flight trail, ground shadow, vector pointer,
-    %             real-time HUD telemetry, side altitude profile, ground drift,
-    %             Mach number & spin rate plots, and terminal detonation shockwave.
-    %   - Output: Exports both a 15-second GIF and a 15-second MP4 video.
+    % the standard 155 mm M107 High-Explosive (HE) projectile with published
+    % published 6-DOF aerodynamic data and live-fire firing conditions:
+    %   - Physical Model: Published 155 mm M107 mass properties (m=43.0 kg,
+    %     d=0.155 m, Ixx=0.144 kg*m^2) and NATO 1:25.16 rifling twist.
+    %   - Aero Model: Khalil ASAT-13 Table 1 Mach-indexed drag curve CD0(Mach),
+    %     lift slope CLa(Mach), and viscous roll damping Clp=-0.020.
+    %   - Firing Solution: Mady 2020 Live-Fire G2 anchor (v0=692.7 m/s,
+    %     QE=44.59 deg = 743.2 mils, target ~18 km range).
+    %   - Environmental: ISA Atmosphere + Jet Stream Wind Shear Profile.
+    %   - Visual: Real-time 3D flight trail, ground shadow, velocity vector,
+    %     real-time HUD telemetry, vertical altitude profile, top-down ground
+    %     track, Mach number & spin decay plots, and terminal detonation aftermath.
+    %   - Output: Exports both a 15-second GIF and an MP4 video (via ffmpeg).
     %
     % Usage:
-    %   unguided_animated()          % Exactly 15.0-second animation (default)
-    %   unguided_animated(15.0)      % Explicit 15.0-second duration
-    %   unguided_animated(10.0)      % 10.0-second duration
+    %   unguided_animated()          % 15.0-second animation (default)
+    %   unguided_animated(15.0)      % Explicit duration
+    %   unguided_animated(10.0, false) % 10.0-second preview without saving GIF
     % =========================================================================
 
     if nargin < 1 || isempty(anim_duration_sec), anim_duration_sec = 15.0; end
     if nargin < 2 || isempty(save_gif), save_gif = true; end
 
-    % Nominal Gun Firing Solution (M109/ATAGS 155mm, Top Zone Propelling Charge)
-    v0_nominal    = 827.0;             % M107 nominal muzzle velocity at Charge 8 (m/s)
-    theta_nominal = 54.5;              % Quadrant elevation angle (degrees) for ~18 km range
-    psi_nominal   = 0.0;               % Gun azimuth laying angle (degrees)
-    target        = [18000, 400];      % Designated Target [Downrange, Crossrange] (m)
+    % Nominal Firing Solution: Mady 2020 Live-Fire G2 condition
+    v0_nominal    = 692.7;                        % M107 nominal muzzle velocity [m/s]
+    theta_nominal = 743.2 * 360.0 / 6000.0;       % Quadrant elevation (44.592 deg, 743.2 mils)
+    psi_nominal   = 0.0;                          % Gun azimuth angle [deg]
+    target        = [18000.0, 400.0];             % Designated Target [Downrange, Crossrange] (m)
 
     % Environmental Wind Configuration
     env_cfg.ground_wind_speed   = 4.0;  % Ground wind speed (m/s)
@@ -34,36 +39,39 @@ function unguided_animated(anim_duration_sec, save_gif)
 
     fprintf('===============================================================\n');
     fprintf('  155 mm M107 UNGUIDED ARTILLERY - %.1f-SECOND FLIGHT ANIMATION\n', anim_duration_sec);
+    fprintf('  Condition: Mady 2020 G2 (v0 = %.1f m/s, QE = %.2f deg / %.1f mils)\n', ...
+            v0_nominal, theta_nominal, theta_nominal * 6000 / 360);
     fprintf('===============================================================\n');
-    fprintf('Integrating 6-DoF Modified Point Mass trajectory...\n');
+    fprintf('Integrating high-fidelity trajectory with published Khalil ASAT-13 data...\n');
 
     % Run high-fidelity physics integration
     flight_data = compute_flight_telemetry(v0_nominal, theta_nominal, psi_nominal, env_cfg);
-    
+
     N_steps = length(flight_data.time);
     t_final = flight_data.time(end);
     imp_x   = flight_data.x(end);
     imp_y   = flight_data.y(end);
     imp_z   = flight_data.z(end);
     miss_d  = sqrt((imp_x - target(1))^2 + (imp_z - target(2))^2);
-    
+
     fprintf('Real Flight Time   : %.2f seconds (Mach %.2f -> Mach %.2f)\n', ...
             t_final, flight_data.Mach(1), flight_data.Mach(end));
+    fprintf('Summit Altitude    : %.1f m (at t = %.1f s)\n', ...
+            max(flight_data.y), flight_data.time(flight_data.y == max(flight_data.y)));
     fprintf('Impact Location    : Downrange = %.1f m | Lateral Drift = %.1f m\n', imp_x, imp_z);
     fprintf('Target Location    : [%.0f, %.0f] m (30m PGK accuracy requirement)\n', target(1), target(2));
     fprintf('Total Miss Distance: %.2f m (Bias dx = %+.1fm, dz = %+.1fm)\n', ...
             miss_d, imp_x - target(1), imp_z - target(2));
 
-    % Target Frame Rate & Exact 15-Second Timing Calculation
+    % Target Frame Rate & 15-Second Timing Calculation
     fps = 15; % 15 frames per second for smooth, crisp playback
     total_frames = round(anim_duration_sec * fps);
-    gif_delay = anim_duration_sec / total_frames; % exact delay per frame (e.g. 1/15 = 0.0667s)
+    gif_delay = anim_duration_sec / total_frames;
 
     % Allocate frames: ~83% flight phase + ~17% terminal impact aftermath
     flight_frames = round(total_frames * 0.83);
     impact_frames = total_frames - flight_frames;
 
-    frame_stride  = max(1, floor(N_steps / flight_frames));
     frame_indices = round(linspace(1, N_steps, flight_frames));
 
     fprintf('Animation Timing   : %d Total Frames at %d FPS = %.2f seconds total duration\n', ...
@@ -73,7 +81,7 @@ function unguided_animated(anim_duration_sec, save_gif)
     fprintf('  - Impact Aftermath: %d frames (%.2f s)\n', ...
             impact_frames, impact_frames * gif_delay);
 
-    % Setup Unified High-Resolution Figure Window
+    % Setup High-Resolution Dark-Themed Engineering Dashboard
     is_headless = isempty(getenv('DISPLAY'));
     vis_mode = 'on';
     if is_headless, vis_mode = 'off'; end
@@ -89,7 +97,7 @@ function unguided_animated(anim_duration_sec, save_gif)
     c_x100 = target(1) + 100 * cos(circ_ang);
     c_z100 = target(2) + 100 * sin(circ_ang);
 
-    max_x = max(flight_data.x) * 1.05;
+    max_x = max([max(flight_data.x), target(1)]) * 1.05;
     max_y = max(flight_data.y) * 1.15;
     min_z = min([0, flight_data.z(:)', target(2)]) - 120;
     max_z = max([0, flight_data.z(:)', target(2)]) + 180;
@@ -109,9 +117,9 @@ function unguided_animated(anim_duration_sec, save_gif)
 
     % Target Ground Markers
     plot3(ax3d, target(1), target(2), 0, 'rx', 'MarkerSize', 14, 'LineWidth', 2.5, ...
-          'DisplayName', 'Target [18000, 400]');
+          'DisplayName', sprintf('Target [%.0f, %.0f]', target(1), target(2)));
     plot3(ax3d, c_x30, c_z30, zeros(size(c_x30)), 'r--', 'LineWidth', 1.8, ...
-          'DisplayName', '30m PGK Spec Circle');
+          'DisplayName', '30m PGK Spec Boundary');
     plot3(ax3d, c_x100, c_z100, zeros(size(c_x100)), ':', 'Color', [0.8 0.4 0.4], ...
           'LineWidth', 1.0, 'DisplayName', '100m Zone');
 
@@ -129,7 +137,7 @@ function unguided_animated(anim_duration_sec, save_gif)
     xlabel(ax3d, 'Downrange X (m)', 'FontWeight', 'bold', 'Color', [0.85 0.9 1.0]);
     ylabel(ax3d, 'Crossrange Z (m)', 'FontWeight', 'bold', 'Color', [0.85 0.9 1.0]);
     zlabel(ax3d, 'Altitude Y (m)', 'FontWeight', 'bold', 'Color', [0.85 0.9 1.0]);
-    title(ax3d, '3D Ballistic Trajectory - 155 mm M107 HE (Modified Point Mass)', ...
+    title(ax3d, '3D Ballistic Trajectory - 155 mm M107 HE (Khalil ASAT-13 / Mady G2)', ...
           'FontSize', 11, 'FontWeight', 'bold', 'Color', [1 1 1]);
     xlim(ax3d, [-500, max_x]);
     ylim(ax3d, [min_z, max_z]);
@@ -187,7 +195,7 @@ function unguided_animated(anim_duration_sec, save_gif)
     ylabel(ax_mach, 'Mach Number (M)', 'FontWeight', 'bold', 'Color', [0.85 0.9 1.0]);
     title(ax_mach, 'Mach Number (Transonic / Supersonic)', 'FontSize', 10, 'FontWeight', 'bold', 'Color', [1 1 1]);
     xlim(ax_mach, [0, t_final * 1.05]);
-    ylim(ax_mach, [0, 2.7]);
+    ylim(ax_mach, [0, 2.3]);
 
     % =========================================================================
     % SUBPLOT 4 (Bottom Middle): Ground Track (Crossrange vs Downrange)
@@ -228,11 +236,11 @@ function unguided_animated(anim_duration_sec, save_gif)
 
     xlabel(ax_spin, 'Flight Time (s)', 'FontWeight', 'bold', 'Color', [0.85 0.9 1.0]);
     ylabel(ax_spin, 'Spin Rate (Hz)', 'FontWeight', 'bold', 'Color', [0.85 0.9 1.0]);
-    title(ax_spin, 'Spin Roll Decay (Viscous Damping)', 'FontSize', 10, 'FontWeight', 'bold', 'Color', [1 1 1]);
+    title(ax_spin, 'Spin Roll Decay (Viscous Damping Clp)', 'FontSize', 10, 'FontWeight', 'bold', 'Color', [1 1 1]);
     xlim(ax_spin, [0, t_final * 1.05]);
-    ylim(ax_spin, [120, 290]);
+    ylim(ax_spin, [80, 195]);
 
-    % Preallocate frame storage for lightning-fast one-shot batch GIF generation
+    % Preallocate frame storage for GIF generation
     recorded_frames = cell(total_frames, 1);
     color_map = [];
 
@@ -271,7 +279,6 @@ function unguided_animated(anim_duration_sec, save_gif)
                       'WData', (flight_data.vy(idx) / cur_v) * v_scale);
 
         % HUD Text
-        anim_time_elapsed = (f - 1) * gif_delay;
         hud_str = sprintf([ ...
             '-- 155mm M107 TELEMETRY --\n' ...
             'Sim Flight Time : %6.2f s\n' ...
@@ -284,8 +291,7 @@ function unguided_animated(anim_duration_sec, save_gif)
             'Yaw of Repose   : %6.2f mils\n' ...
             'Dyn Pressure    : %6.1f kPa\n' ...
             'Target Vector   : [%+.0fm, %+.0fm]'], ...
-            cur_t, anim_time_elapsed, anim_duration_sec, ...
-            cur_x, cur_z, cur_y, cur_v, cur_m, cur_p, round(cur_p * 60), ...
+            cur_t, cur_x, cur_z, cur_y, cur_v, cur_m, cur_p, round(cur_p * 60), ...
             cur_ae, cur_q, cur_x - target(1), cur_z - target(2));
         set(hud_text, 'String', hud_str);
 
@@ -316,7 +322,7 @@ function unguided_animated(anim_duration_sec, save_gif)
                 if isempty(color_map), color_map = cm; end
                 recorded_frames{f} = imind;
             catch
-                % Graceful skip
+                % Graceful skip in headless/mock
             end
         end
     end
@@ -324,7 +330,6 @@ function unguided_animated(anim_duration_sec, save_gif)
     % =========================================================================
     % PHASE 2: TERMINAL IMPACT & DETONATION AFTERMATH (Last ~2.5 seconds)
     % =========================================================================
-    % Detonation impact marker in 3D
     plot3(ax3d, imp_x, imp_z, 0, 'p', 'MarkerSize', 18, 'MarkerFaceColor', [1.0 0.85 0.1], ...
           'MarkerEdgeColor', [1.0 0.1 0.0], 'LineWidth', 2.2);
     text(ax3d, imp_x + 120, imp_z + 80, 50, sprintf('IMPACT [%.0fm, %.0fm]', imp_x, imp_z), ...
@@ -343,7 +348,6 @@ function unguided_animated(anim_duration_sec, save_gif)
 
     for imp_i = 1:impact_frames
         f = flight_frames + imp_i;
-        anim_time_elapsed = (f - 1) * gif_delay;
 
         % Expanding shockwave radius at impact
         blast_radius = 20.0 + (imp_i / impact_frames) * 350.0;
@@ -363,8 +367,7 @@ function unguided_animated(anim_duration_sec, save_gif)
             'MISS DISTANCE   : %6.2f METERS\n' ...
             'PGK Spec Limit  : <= 30.0 METERS\n' ...
             'RESULT STATUS   : FAILED (>30m)'], ...
-            t_final, anim_time_elapsed, anim_duration_sec, ...
-            imp_x, imp_z, target(1), target(2), ...
+            t_final, imp_x, imp_z, target(1), target(2), ...
             imp_x - target(1), imp_z - target(2), miss_d);
         set(hud_text, 'String', hud_str, 'Color', [1.0 0.35 0.3], ...
                       'EdgeColor', [0.8 0.2 0.2]);
@@ -393,7 +396,7 @@ function unguided_animated(anim_duration_sec, save_gif)
     fprintf('Final dashboard saved to unguided_animated_analysis.png\n');
 
     % =========================================================================
-    % EXPORT ANIMATED GIF (Batch Write) & MP4 VIDEO
+    % GIF & MP4 GENERATION
     % =========================================================================
     gif_filename = 'unguided_trajectory_15s.gif';
     mp4_filename = 'unguided_trajectory_15s.mp4';
@@ -421,7 +424,7 @@ function unguided_animated(anim_duration_sec, save_gif)
                 valid_count, gif_delay, valid_count * gif_delay);
 
         % Convert GIF to high-compatibility MP4 video using ffmpeg
-        [status, ~] = system(sprintf('which ffmpeg >/dev/null 2>&1'));
+        [status, ~] = system('which ffmpeg >/dev/null 2>&1');
         if status == 0
             fprintf('Converting to MP4 video (%s)...\n', mp4_filename);
             cmd = sprintf('ffmpeg -y -i %s -c:v libx264 -pix_fmt yuv420p -r %d %s >/dev/null 2>&1', ...
@@ -439,30 +442,32 @@ function unguided_animated(anim_duration_sec, save_gif)
 end
 
 % =========================================================================
-% HIGH-FIDELITY FLIGHT TELEMETRY COMPUTATION (STANAG 4355 MPM + SPIN)
+%% HIGH-FIDELITY FLIGHT TELEMETRY COMPUTATION (KHALIL ASAT-13 / MADY 2020)
 % =========================================================================
 function data = compute_flight_telemetry(v0, theta, psi, env_cfg)
     g0     = 9.80665;
-    m      = 43.10;                % Shell mass (kg)
+    m      = 43.0;                 % Shell mass (kg) (Khalil ASAT-13)
     d_proj = 0.155;                % Caliber diameter (m)
     S_ref  = pi * (d_proj / 2)^2;  % Reference area (m^2)
-    Cd0    = 0.25;                 % Subsonic zero-lift drag
-    Ix     = 0.142;                % Axial moment of inertia (kg*m^2)
-    Iy     = 1.62;                 % Transverse moment of inertia (kg*m^2)
+    Ix     = 0.144;                % Axial moment of inertia (kg*m^2)
 
-    twist_calibers = 20.0;
-    p = (2.0 * pi * v0) / (twist_calibers * d_proj); % Initial spin (rad/s) (~267 Hz)
+    twist_calibers = 25.16;        % NATO 1:25.16 twist (Khalil Table 1)
+    p = (2.0 * pi * v0) / (twist_calibers * d_proj); % Initial spin (rad/s) (~177.6 Hz)
 
-    Clp      = -0.015;             % Viscous roll damping coefficient
-    C_La     = 2.0;                % Lift slope derivative (per rad)
-    C_mag_p  = 0.008;              % Magnus derivative
+    Clp      = -0.020;             % Viscous roll damping (Khalil Table 1)
+    C_mag_p  = 0.008;              % Magnus coefficient
+
+    % Complete Mach Aero Tables (Khalil ASAT-13 Table 1)
+    Mgrid   = [0.01 0.60 0.80 0.90 0.95 1.00 1.05 1.10 1.20 1.35 1.50 1.75 2.00];
+    CD0_tab = [0.144 0.144 0.146 0.167 0.221 0.327 0.383 0.381 0.370 0.353 0.338 0.314 0.294];
+    CLa_tab = [1.763 1.763 1.783 1.827 2.038 2.153 2.207 2.255 2.325 2.442 2.556 2.692 2.747];
 
     % Initial velocity vector
     vx = v0 * cosd(theta) * cosd(psi);
     vy = v0 * sind(theta);
     vz = v0 * cosd(theta) * sind(psi);
 
-    state = [0; 0; 0; vx; vy; vz];
+    state = [0; 1.0; 0; vx; vy; vz]; % Muzzle height 1.0 m
     dt = 0.01;
     t = 0.0;
 
@@ -493,9 +498,10 @@ function data = compute_flight_telemetry(v0, theta, psi, env_cfg)
         v_rel_mag = norm(v_rel_vec);
         v_unit    = v_rel_vec / max(1e-3, v_rel_mag);
 
-        % 4. Compressible Mach Drag
+        % 4. Published Compressible Mach Drag & Lift
         Mach = v_rel_mag / a_sound;
-        Cd   = cd_mach_model(Mach, Cd0);
+        Cd   = interp1(Mgrid, CD0_tab, min(2.0, max(0.01, Mach)), 'linear', 'extrap');
+        CLa  = interp1(Mgrid, CLa_tab, min(2.0, max(0.01, Mach)), 'linear', 'extrap');
 
         % 5. Viscous Roll Spin Decay
         dp_dt = (0.5 * rho * v_rel_mag * S_ref * (d_proj^2) * Clp / Ix) * p;
@@ -510,7 +516,7 @@ function data = compute_flight_telemetry(v0, theta, psi, env_cfg)
         alpha_e      = (2.0 * Ix * p / (denom_repose * v_rel_mag)) * v_cross_g;
 
         % Aerodynamic Lift Force from Equilibrium Yaw of Repose
-        F_lift_drift = 0.5 * rho * S_ref * (v_rel_mag^2) * C_La * alpha_e;
+        F_lift_drift = 0.5 * rho * S_ref * (v_rel_mag^2) * CLa * alpha_e;
 
         % Dimensionally Rigorous Magnus Force
         F_mag = 0.5 * rho * S_ref * d_proj * C_mag_p * p * v_rel_mag * cross(v_unit, alpha_e);
@@ -537,7 +543,7 @@ function data = compute_flight_telemetry(v0, theta, psi, env_cfg)
 
     % Linear ground-plane interpolation at impact
     k_last = k - 1;
-    frac = log_pos(k_last, 2) / (log_pos(k_last, 2) - state(2));
+    frac = log_pos(k_last, 2) / max(1e-6, (log_pos(k_last, 2) - state(2)));
     imp_x = log_pos(k_last, 1) + frac * (state(1) - log_pos(k_last, 1));
     imp_z = log_pos(k_last, 3) + frac * (state(3) - log_pos(k_last, 3));
     imp_t = log_t(k_last) + frac * dt;
@@ -565,7 +571,7 @@ function data = compute_flight_telemetry(v0, theta, psi, env_cfg)
     data.rho          = log_rho(1:k);
 end
 
-% --- International Standard Atmosphere (ISA) ---
+% --- Component 1: International Standard Atmosphere (ISA) ---
 function [T, P, rho, a_sound] = isa_atmosphere(alt)
     R_air = 287.05287;
     gamma = 1.4;
@@ -585,7 +591,7 @@ function [T, P, rho, a_sound] = isa_atmosphere(alt)
     a_sound = sqrt(gamma * R_air * T);
 end
 
-% --- Altitude-Dependent Jet Stream Wind Profile ---
+% --- Component 2: Altitude-Dependent Jet Stream Wind Profile ---
 function v_wind = wind_profile(alt, env_cfg)
     v_ground_mag = env_cfg.ground_wind_speed;
     wind_dir_deg = env_cfg.ground_wind_azimuth;
@@ -607,17 +613,4 @@ function v_wind = wind_profile(alt, env_cfg)
     end
     theta_rad = deg2rad(v_dir);
     v_wind = [v_mag * cos(theta_rad); 0.0; v_mag * sin(theta_rad)];
-end
-
-% --- Compressibility / Mach Drag Scaling Model ---
-function Cd = cd_mach_model(Mach, Cd0)
-    if Mach < 0.8
-        Cd = Cd0;
-    elseif Mach >= 0.8 && Mach < 1.05
-        Cd = Cd0 + 0.22 * ((Mach - 0.8) / 0.25)^2;
-    elseif Mach >= 1.05 && Mach < 1.6
-        Cd = (Cd0 + 0.22) - 0.08 * ((Mach - 1.05) / 0.55);
-    else
-        Cd = (Cd0 + 0.14) / (1 + 0.15 * (Mach - 1.6));
-    end
 end
