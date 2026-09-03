@@ -25,6 +25,7 @@ int masterMode = 0;
 unsigned long lastMasterPress = 0;
 unsigned long lastNavPress = 0;
 unsigned long lastScreenUpdate = 0;
+unsigned long lastSerialPrint = 0;
 
 // Nav Variables (Mode 0)
 int navScreen = 0;              
@@ -52,10 +53,11 @@ void setup() {
   Wire.begin(21, 22);
 
   if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("OLED Failed"); while(1);
+    Serial.println("OLED Failed");
+  } else {
+    display.clearDisplay(); display.setTextColor(SSD1306_WHITE);
+    display.setCursor(0,20); display.println("Booting Master..."); display.display();
   }
-  display.clearDisplay(); display.setTextColor(SSD1306_WHITE);
-  display.setCursor(0,20); display.println("Booting Master..."); display.display();
 
   Wire.beginTransmission(MPU_ADDR); Wire.write(0x6B); Wire.write(0); Wire.endTransmission(true);
 
@@ -120,8 +122,37 @@ void loop() {
     }
   }
 
+  // --- 3. Telemetry Printing for Simulation / Stats ---
+  if (millis() - lastSerialPrint >= 100) {
+    lastSerialPrint = millis();
 
-  // --- 3. Screen Drawing ---
+    float p_val = bmp.readPressure() / 100.0F;
+    float t_val = bmp.readTemperature();
+    float alt_val = bmp.readAltitude(1013.25);
+    float lat_val = gps.location.isValid() ? (float)gps.location.lat() : NAN;
+    float lon_val = gps.location.isValid() ? (float)gps.location.lng() : NAN;
+    float volt_val = ina219.getBusVoltage_V();
+
+    float ax_val = NAN, ay_val = NAN, az_val = NAN;
+    Wire.beginTransmission(MPU_ADDR); 
+    Wire.write(0x3B); 
+    if (Wire.endTransmission(false) == 0) {
+      if (Wire.requestFrom(MPU_ADDR, 6, true) == 6) {
+        int16_t AcX = Wire.read()<<8 | Wire.read();
+        int16_t AcY = Wire.read()<<8 | Wire.read();
+        int16_t AcZ = Wire.read()<<8 | Wire.read();
+        ax_val = AcX / 16384.0;
+        ay_val = AcY / 16384.0;
+        az_val = AcZ / 16384.0;
+      }
+    }
+
+    Serial.printf("%.2f,%.2f,%.2f,%.5f,%.5f,%.2f,%.2f,%.2f,%.2f,%.2f,%d\n",
+                  p_val, t_val, alt_val, lat_val, lon_val, volt_val,
+                  ax_val, ay_val, az_val, 0.0, impactAlertActive ? 1 : 0);
+  }
+
+  // --- 4. Screen Drawing ---
   if (millis() - lastScreenUpdate >= 100) {
     lastScreenUpdate = millis();
     display.clearDisplay();
@@ -194,7 +225,7 @@ void loop() {
         display.print(3 - ((millis() - impactStartTime) / 1000));
         display.println("s");
       } else {
-        display.setTextSize(2);
+        display.setTextSize(2); 
         display.println("SAFE");
         display.setTextSize(1);
         display.setCursor(0, 45);
