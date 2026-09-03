@@ -1,1 +1,9 @@
-.DS_Store
+# KiCad temporary and lock files
+*.lck
+*-bak
+*.bck
+*.kicad_prl
+temp-freerouting.dsn
+
+# Local history extensions
+**/hardware/PCB/.history/
