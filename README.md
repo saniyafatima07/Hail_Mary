@@ -1,12 +1,12 @@
-# Low-Cost Precision Guidance and Smart Electronic Fuze System for a 155 mm Artillery Shell
+# Low Cost Precision Guidance and Smart Electronic Fuze System for a 155 mm Artillery Shell
 
-> A low-cost embedded sensing, telemetry, and actuation prototype for developing the electronics, environmental monitoring, navigation, and multi-mode event-detection subsystems of a precision guidance and smart electronic fuze architecture.
+> A low cost Precision Guidance System Kit prototype designed as a modular electronics package that can be integrated with an existing 155 mm artillery-shell form factor. The system combines inertial sensing, GNSS positioning, environmental monitoring, telemetry, BLDC based actuation, and multi mode event detection to demonstrate the architecture of a retrofit guidance and electronic fuze platform. 
 
 ## Overview
 
-The **Low-Cost Precision Guidance and Smart Electronic Fuze System** is a prototype development platform focused on integrating embedded sensing, navigation, telemetry, actuation, and a multi-mode electronic fuze architecture.
+The **Low Cost Precision Guidance and Smart Electronic Fuze System** is a prototype development platform focused on integrating embedded sensing, navigation, telemetry, actuation, and a multi-mode electronic fuze architecture.
 
-The system is designed around a modular embedded platform that combines inertial sensing, GNSS positioning, atmospheric monitoring, power telemetry, proximity detection, impact/event sensing, and **BLDC-based actuation**.
+The system is designed around a modular embedded platform that combines inertial sensing, GNSS positioning, atmospheric monitoring, power telemetry, proximity detection, impact/event sensing, and **BLDC based actuation**.
 
 The current V1 prototype uses an **ESP32** as the primary embedded controller and integrates:
 
@@ -24,7 +24,7 @@ The system supports a **Multi-Mode Smart Fuze architecture** consisting of:
 - **Time Mode**
 - **Impact Mode**
 
-The V1 platform is intended primarily for **laboratory testing, sensor integration, firmware development, simulation, telemetry, and proof-of-concept validation**.
+The V1 platform is intended primarily for **Testing, sensor integration, firmware development, simulation, telemetry, and proof of concept validation**.
 
 ---
 
@@ -41,7 +41,7 @@ The project aims to develop a compact and modular embedded platform capable of s
 7. BLDC-based actuation
 8. Multi-mode fuze state management
 9. Sensor fusion
-10. Real-time telemetry
+10. Real time telemetry
 
 ---
 
