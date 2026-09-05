@@ -1,12 +1,13 @@
 # Low Cost Precision Guidance and Smart Electronic Fuze System for a 155 mm Artillery Shell
 
-> A low cost Precision Guidance System Kit prototype designed as a modular electronics package that can be integrated with an existing 155 mm artillery-shell form factor. The system combines inertial sensing, GNSS positioning, environmental monitoring, telemetry, BLDC based actuation, and multi mode event detection to demonstrate the architecture of a retrofit guidance and electronic fuze platform.
->
-> Demo Video: https://youtu.be/oDgQXhc_m30?si=fA8NoUL_oSH_2LAC
+A low cost Precision Guidance System Kit prototype designed as a modular electronics package that can be integrated with an existing 155 mm artillery-shell form factor. The system combines inertial sensing, GNSS positioning, environmental monitoring, BLDC based actuation and multi mode event detection to demonstrate the architecture of a retrofit guidance and electronic fuze platform.
+
+## Demo Video
+
 
 ## Overview
 
-The **Low Cost Precision Guidance and Smart Electronic Fuze System** is a prototype development platform focused on integrating embedded sensing, navigation, telemetry, actuation, and a multi-mode electronic fuze architecture.
+The **Low Cost Precision Guidance and Smart Electronic Fuze System** is focused on integrating embedded sensing, navigation, actuation and a multi-mode electronic fuze architecture.
 
 The system is designed around a modular embedded platform that combines inertial sensing, GNSS positioning, atmospheric monitoring, power telemetry, proximity detection, impact/event sensing, and **BLDC based actuation**.
 
