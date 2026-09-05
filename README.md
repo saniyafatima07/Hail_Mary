@@ -64,6 +64,55 @@ The project aims to develop a compact and modular embedded platform capable of s
 
 ---
 
+
+## Simulation Stack                                                                                                                                                                      
+                                                                                                                                                                                            
+   The simulation is a three-layer chain, from pure physics to the real embedded                                                                                                            
+   controller. Each layer validates the one above it, and every equation is                                                                                                                 
+   traceable to published exterior-ballistics literature (McCoy *Modern Exterior                                                                                                            
+   Ballistics*, Raza & Wang 2022, Cheng 2019, Chusilp 2012, Glebocki 2022).                                                                                                                 
+                                                                                                                                                                                            
+   ```text                                                                                                                                                                                  
+   +---------------------------------------------------------------+                                                                                                                        
+   |  LAYER 1 — 3-DOF FLIGHT PHYSICS (truth model)                 |                                                                                                                        
+   |  point-mass trajectory: ISA atmosphere, Mach-dependent Cd,    |                                                                                                                        
+   |  altitude wind profile, spin decay, Magnus, yaw of repose     |                                                                                                                        
+   +------------------------------+--------------------------------+                                                                                                                        
+                                  |                                                                                                                                                         
+           +----------------------+----------------------+                                                                                                                                  
+           v                                             v                                                                                                                                  
+   +---------------------------+   +--------------------------------------+                                                                                                                 
+   | LAYER 2 — HARDWARE-IN-    |   | LAYER 3 — ONBOARD-GNC SIL            |                                                                                                                 
+   | THE-LOOP (HIL)            |   | (guidance_ordnance.m)                |                                                                                                                 
+   | (guided_sensor.m)         |   | firmware_true.ino's exact math       |                                                                                                                 
+   | PC flies the physics,     |   | (estimator + impact predictor +      |                                                                                                                 
+   | REAL ESP32 streams real   |   | guidance law) flies the round using  |                                                                                                                 
+   | sensor telemetry over     |   | ONLY noisy simulated baro/GPS at     |                                                                                                                 
+   | UART; PC streams back     |   | board rates. Validates the onboard   |                                                                                                                 
+   | canard commands in        |   | algorithm BEFORE flashing.           |                                                                                                                 
+   | real time (1x - 4x).      |   |                                      |                                                                                                                 
+   +---------------------------+   +--------------------------------------+                                                                                                                 
+ ```
+
+The GNC Math (implemented in firmware + validated in sim)                                                                                                                                  
+                                                                                                                                                                                            
+ - Firing solution (Chusilp 2012): bisection on gun elevation, secant                                                                                                                       
+   iteration on azimuth for wind-drift cancellation.                                                                                                                                        
+ - State estimation on board: baro altitude via hypsometric equation;                                                                                                                       
+   vertical speed from a first-order complementary filter                                                                                                                                   
+   vz ← 0.8·vz + 0.2·(Δh/Δt) at 10 Hz; GPS velocity smoothing at 1 Hz.                                                                                                                      
+ - Impact Point Prediction (IPP) (McCoy; Raza & Wang 2022 use MPLT — we use                                                                                                                 
+   the analytic point-mass equivalent an ESP32 can run in µs):                                                                                                                              
+   closed-form time-to-impact τ = (vz + √(vz² + 2gz))/g, then drag-decay                                                                                                                    
+   ballistic coast x_imp = x + vx·(1 − e^(−kd·τ))/kd.                                                                                                                                       
+ - Guidance law: saturated proportional correction                                                                                                                                          
+   δ = sat(Kp·(x_tgt − x_imp), ±15°), active post-apogee, 1 Hz.                                                                                                                             
+ - Single-channel roll-orientation steering (Cheng 2019, Raza & Wang 2022):                                                                                                                 
+   fixed-cant canards on the fuze cone; force orientation is the control                                                                                                                    
+   variable, matching the dual-spin PGK architecture (M1156, Burke & Pergolizzi 2008).
+
+   
+
 ## System Architecture
 
 ```text
