@@ -14,13 +14,13 @@ The system is designed around a modular embedded platform that combines inertial
 
 The current V1 prototype uses an **ESP32** as the primary embedded controller and integrates:
 
-- **MPU6050** — 6-axis inertial measurement
-- **NEO-6M** — GNSS positioning
-- **BMP280** — Barometric pressure and temperature
-- **INA219** — Voltage and current monitoring
-- **IR Proximity Sensor** — Proximity detection
-- **SW-240** — Impact/vibration event detection
-- **BLDC Motor** — Actuation mechanism for the prototype guidance subsystem
+- **MPU6050**:  6 axis inertial measurement
+- **NEO-6M**:  GNSS positioning
+- **BMP280**:  Barometric pressure and temperature
+- **INA219**:  Voltage and current monitoring
+- **IR Proximity Sensor**:  Proximity detection
+- **SW-240**:  Impact/vibration event detection
+- **BLDC Motor**:  Actuation mechanism for the prototype guidance subsystem
 
 The system supports a **Multi-Mode Smart Fuze architecture** consisting of:
 
