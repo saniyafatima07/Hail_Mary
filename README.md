@@ -4,6 +4,7 @@ A low cost Precision Guidance System Kit prototype designed as a modular electro
 
 ## Demo Video
 
+https://github.com/user-attachments/assets/ea4bcfed-2732-404f-be3d-91d5685b1a28
 
 ## Overview
 
